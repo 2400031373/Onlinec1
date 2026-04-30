@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCourseSystem } from "../context/useCourseSystem";
 
 function Assignment() {
@@ -19,6 +19,38 @@ function Assignment() {
 
   const availableAssignments = selectedCourse?.assignments || [];
   const mySubmissions = submissions.filter((submission) => submission.studentName === studentName);
+
+  useEffect(() => {
+    if (courses.length === 0) {
+      setSelectedCourseId("");
+      setSelectedAssignmentId("");
+      return;
+    }
+
+    if (!selectedCourseId) {
+      const firstCourse = courses[0];
+      setSelectedCourseId(firstCourse.id);
+      setSelectedAssignmentId(firstCourse.assignments[0]?.id || "");
+      return;
+    }
+
+    const selectedStillExists = courses.some((course) => course.id === selectedCourseId);
+    if (!selectedStillExists) {
+      const firstCourse = courses[0];
+      setSelectedCourseId(firstCourse.id);
+      setSelectedAssignmentId(firstCourse.assignments[0]?.id || "");
+      return;
+    }
+
+    const currentCourse = courses.find((course) => course.id === selectedCourseId);
+    const assignmentStillExists = currentCourse?.assignments.some(
+      (assignment) => assignment.id === selectedAssignmentId
+    );
+
+    if (!assignmentStillExists) {
+      setSelectedAssignmentId(currentCourse?.assignments[0]?.id || "");
+    }
+  }, [courses, selectedCourseId, selectedAssignmentId]);
 
   function handleCourseChange(event) {
     const courseId = event.target.value;

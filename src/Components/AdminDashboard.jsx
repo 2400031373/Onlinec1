@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCourseSystem } from "../context/useCourseSystem";
 
 function AdminDashboard() {
@@ -21,6 +21,12 @@ function AdminDashboard() {
     maxMarks: 100,
   });
   const [gradingInputs, setGradingInputs] = useState({});
+
+  useEffect(() => {
+    if (!selectedCourseId && courses.length > 0) {
+      setSelectedCourseId(courses[0].id);
+    }
+  }, [courses, selectedCourseId]);
 
   const totalAssignments = useMemo(
     () => courses.reduce((count, course) => count + course.assignments.length, 0),

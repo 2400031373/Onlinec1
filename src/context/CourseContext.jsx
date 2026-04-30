@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { initialCourses, initialEnrollment, initialSubmissions } from "../data/seedData";
 import { CourseSystemContext } from "./courseSystemContext";
 
 const STORAGE_KEYS = {
-  courses: "course-system-courses",
   enrolled: "course-system-enrolled",
-  submissions: "course-system-submissions",
   auth: "course-system-auth",
-  users: "course-system-users",
 };
+
+const API_BASE_URL = "http://localhost:8080/api";
 
 const defaultStudentName = "Rohit";
 
@@ -25,272 +23,360 @@ function buildId(prefix) {
   return `${prefix}${Date.now()}${Math.floor(Math.random() * 1000)}`;
 }
 
-export function CourseProvider({ children }) {
-  const [courses, setCourses] = useState(() => readStoredValue(STORAGE_KEYS.courses, initialCourses));
-  const [enrolledCourseIds, setEnrolledCourseIds] = useState(() =>
-    readStoredValue(STORAGE_KEYS.enrolled, initialEnrollment)
-  );
-  const [submissions, setSubmissions] = useState(() =>
-    readStoredValue(STORAGE_KEYS.submissions, initialSubmissions)
-  );
-  const [auth, setAuth] = useState(() => readStoredValue(STORAGE_KEYS.auth, null));
-  const [users, setUsers] = useState(() => readStoredValue(STORAGE_KEYS.users, []));
+function normalizeCourse(course) {
+  return {
+    ...course,
+    tags: Array.isArray(course.tags)
+      ? course.tags
+      : String(course.tags || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+    modules: Array.isArray(course.modules) ? course.modules : [],
+    assignments: Array.isArray(course.assignments) ? course.assignments : [],
+  };
+}
 
-  const studentName = auth?.role === "student" && auth?.name ? auth.name : defaultStudentName;
+function normalizeSubmission(submission) {
+  return {
+    ...submission,
+    status: submission.status || "Submitted",
+    marks: submission.marks ?? null,
+    feedback: submission.feedback || "",
+  };
+}
+
+export function CourseProvider({ children }) {
+  const [courses, setCourses] = useState([]);
+  const [enrolledCourseIds, setEnrolledCourseIds] = useState(() =>
+    readStoredValue(STORAGE_KEYS.enrolled, [])
+  );
+  const [submissions, setSubmissions] = useState([]);
+  const [auth, setAuth] = useState(() =>
+    readStoredValue(STORAGE_KEYS.auth, null)
+  );
+
+  const studentName =
+    auth?.role === "student" && auth?.name
+      ? auth.name
+      : defaultStudentName;
 
   const enrolledCourses = useMemo(
     () => courses.filter((course) => enrolledCourseIds.includes(course.id)),
     [courses, enrolledCourseIds]
   );
 
-  function createCourse(courseInput) {
-    const courseId = buildId("c");
-    const assignmentId = buildId("a");
+  useEffect(() => {
+    async function loadCourses() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/courses`);
+        if (!response.ok) return;
 
-    const newCourse = {
-      id: courseId,
+        const data = await response.json();
+        setCourses(Array.isArray(data) ? data.map(normalizeCourse) : []);
+      } catch {
+        setCourses([]);
+      }
+    }
+
+    loadCourses();
+  }, []);
+
+  useEffect(() => {
+    async function loadSubmissions() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/submissions`);
+        if (!response.ok) return;
+
+        const data = await response.json();
+        setSubmissions(
+          Array.isArray(data) ? data.map(normalizeSubmission) : []
+        );
+      } catch {
+        setSubmissions([]);
+      }
+    }
+
+    loadSubmissions();
+  }, []);
+
+  async function createCourse(courseInput) {
+    const parsedTags = (courseInput.tags || "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+
+    const payload = {
       title: courseInput.title,
       category: courseInput.category,
       level: courseInput.level,
       description: courseInput.description,
-      tags: courseInput.tags
-        .split(",")
-        .map((item) => item.trim().toLowerCase())
-        .filter(Boolean),
-      modules: [
-        { id: buildId("m"), title: "Course Overview", type: "Lecture", duration: "30 min" },
-        { id: buildId("m"), title: "Core Concepts", type: "Workshop", duration: "45 min" },
-      ],
-      assignments: [
-        {
-          id: assignmentId,
-          title: `${courseInput.title} - Initial Assessment`,
-          dueDate: courseInput.dueDate,
-          maxMarks: 100,
-          type: "Assessment",
-        },
-      ],
+      tags: parsedTags,
     };
 
-    setCourses((previousCourses) => [newCourse, ...previousCourses]);
-  }
-
-  function addModule(courseId, moduleInput) {
-    setCourses((previousCourses) =>
-      previousCourses.map((course) => {
-        if (course.id !== courseId) {
-          return course;
-        }
-
-        return {
-          ...course,
-          modules: [...course.modules, { id: buildId("m"), ...moduleInput }],
-        };
-      })
-    );
-  }
-
-  function addAssignment(courseId, assignmentInput) {
-    setCourses((previousCourses) =>
-      previousCourses.map((course) => {
-        if (course.id !== courseId) {
-          return course;
-        }
-
-        return {
-          ...course,
-          assignments: [
-            ...course.assignments,
-            {
-              id: buildId("a"),
-              title: assignmentInput.title,
-              dueDate: assignmentInput.dueDate,
-              maxMarks: Number(assignmentInput.maxMarks),
-              type: assignmentInput.type,
-            },
-          ],
-        };
-      })
-    );
-  }
-
-  function enrollCourse(courseId) {
-    setEnrolledCourseIds((previousIds) =>
-      previousIds.includes(courseId) ? previousIds : [...previousIds, courseId]
-    );
-  }
-
-  function login(loginInput) {
-    const role = loginInput?.role || "student";
-    const email = (loginInput?.email || "").trim().toLowerCase();
-    const name = (loginInput?.name || "").trim();
-    const matchedAccount = users.find((account) => account.role === role && account.email === email);
-
-    const resolvedName =
-      matchedAccount?.name ||
-      name ||
-      (role === "educator" ? "Educator" : defaultStudentName);
-
-    setAuth({
-      role,
-      name: resolvedName,
-      email: matchedAccount?.email || email || "",
+    const response = await fetch(`${API_BASE_URL}/courses`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     });
+
+    if (!response.ok) return;
+
+    const newCourse = await response.json();
+
+    setCourses((previousCourses) => [
+      normalizeCourse(newCourse),
+      ...previousCourses,
+    ]);
+
+    if (courseInput.dueDate) {
+      addAssignment(newCourse.id, {
+        title: `${courseInput.title} - Initial Assessment`,
+        type: "Assessment",
+        dueDate: courseInput.dueDate,
+        maxMarks: 100,
+      });
+    }
   }
 
-  function registerAccount(accountInput) {
-    const role = accountInput?.role || "student";
-    const email = (accountInput?.email || "").trim().toLowerCase();
-    const name = (accountInput?.name || "").trim();
-    const password = accountInput?.password || "";
-
-    if (!email || !name || !password) {
-      return;
-    }
-
-    setUsers((previousUsers) => {
-      const accountExists = previousUsers.some(
-        (account) => account.role === role && account.email === email
+  async function addModule(courseId, moduleInput) {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/courses/${courseId}/modules`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(moduleInput),
+        }
       );
 
-      if (accountExists) {
-        return previousUsers.map((account) =>
-          account.role === role && account.email === email
-            ? {
-                ...account,
-                name,
-                password,
-                updatedAt: new Date().toISOString(),
-              }
-            : account
+      if (response.ok) {
+        const createdModule = await response.json();
+
+        setCourses((previousCourses) =>
+          previousCourses.map((course) =>
+            course.id === courseId
+              ? {
+                  ...course,
+                  modules: [...course.modules, createdModule],
+                }
+              : course
+          )
         );
       }
+    } catch {}
+  }
 
-      return [
+  async function addAssignment(courseId, assignmentInput) {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/courses/${courseId}/assignments`,
         {
-          id: buildId("u"),
-          role,
-          name,
-          email,
-          password,
-          createdAt: new Date().toISOString(),
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(assignmentInput),
+        }
+      );
+
+      if (response.ok) {
+        const createdAssignment = await response.json();
+
+        setCourses((previousCourses) =>
+          previousCourses.map((course) =>
+            course.id === courseId
+              ? {
+                  ...course,
+                  assignments: [
+                    ...course.assignments,
+                    createdAssignment,
+                  ],
+                }
+              : course
+          )
+        );
+      }
+    } catch {}
+  }
+
+  async function enrollCourse(courseId) {
+    try {
+      await fetch(`${API_BASE_URL}/enroll`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-        ...previousUsers,
-      ];
-    });
+        body: JSON.stringify({ courseId }),
+      });
+    } catch {}
+
+    setEnrolledCourseIds((previousIds) =>
+      previousIds.includes(courseId)
+        ? previousIds
+        : [...previousIds, courseId]
+    );
+  }
+
+  async function login(loginInput) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          role: loginInput.role,
+          email: loginInput.email,
+          password: loginInput.password,
+        }),
+      });
+
+      if (!response.ok) {
+        alert("Invalid Login");
+        return false;
+      }
+
+      const user = await response.json();
+
+      setAuth({
+        role: user.role,
+        name: user.name,
+        email: user.email,
+      });
+
+      return true;
+    } catch {
+      alert("Server Error");
+      return false;
+    }
+  }
+
+  async function registerAccount(accountInput) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(accountInput),
+      });
+
+      if (!response.ok) {
+        alert("Registration Failed");
+        return false;
+      }
+
+      alert("Account Created Successfully");
+      return true;
+    } catch {
+      alert("Server Error");
+      return false;
+    }
   }
 
   function logout() {
     setAuth(null);
   }
 
-  function submitAssignment(submissionInput) {
-    const selectedCourse = courses.find((course) => course.id === submissionInput.courseId);
-    const selectedAssignment = selectedCourse?.assignments.find(
-      (assignment) => assignment.id === submissionInput.assignmentId
+  async function submitAssignment(submissionInput) {
+    const selectedCourse = courses.find(
+      (course) => course.id === submissionInput.courseId
     );
 
-    if (!selectedCourse || !selectedAssignment) {
-      return;
-    }
+    const selectedAssignment = selectedCourse?.assignments.find(
+      (assignment) =>
+        assignment.id === submissionInput.assignmentId
+    );
 
-    const createdAt = new Date().toLocaleString();
+    if (!selectedCourse || !selectedAssignment) return;
 
-    setSubmissions((previousSubmissions) => {
-      const existingSubmission = previousSubmissions.find(
-        (item) =>
-          item.courseId === submissionInput.courseId &&
-          item.assignmentId === submissionInput.assignmentId &&
-          item.studentName === studentName
+    const response = await fetch(`${API_BASE_URL}/submit`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...submissionInput,
+        studentName,
+      }),
+    });
+
+    if (!response.ok) return;
+
+    const created = await response.json();
+
+    setSubmissions((previousSubmissions) => [
+      {
+        ...normalizeSubmission(created),
+        studentName,
+        courseTitle: selectedCourse.title,
+        assignmentTitle: selectedAssignment.title,
+      },
+      ...previousSubmissions,
+    ]);
+  }
+
+  async function gradeSubmission(submissionId, marks, feedback) {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/submissions/${submissionId}/grade`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ marks, feedback }),
+        }
       );
 
-      if (existingSubmission) {
-        return previousSubmissions.map((item) =>
-          item.id === existingSubmission.id
-            ? {
-                ...item,
-                fileName: submissionInput.fileName,
-                notes: submissionInput.notes,
-                createdAt,
-                status: "Resubmitted",
-                marks: null,
-                feedback: "",
-              }
-            : item
+      if (response.ok) {
+        const updated = await response.json();
+
+        setSubmissions((previousSubmissions) =>
+          previousSubmissions.map((submission) =>
+            submission.id === submissionId
+              ? { ...submission, ...updated }
+              : submission
+          )
         );
       }
-
-      return [
-        {
-          id: buildId("s"),
-          studentName,
-          ...submissionInput,
-          courseTitle: selectedCourse.title,
-          assignmentTitle: selectedAssignment.title,
-          assignmentType: selectedAssignment.type,
-          dueDate: selectedAssignment.dueDate,
-          maxMarks: selectedAssignment.maxMarks,
-          status: "Submitted",
-          createdAt,
-          marks: null,
-          feedback: "",
-        },
-        ...previousSubmissions,
-      ];
-    });
+    } catch {}
   }
 
-  function gradeSubmission(submissionId, marks, feedback) {
-    setSubmissions((previousSubmissions) =>
-      previousSubmissions.map((submission) =>
-        submission.id === submissionId
-          ? {
-              ...submission,
-              marks,
-              feedback,
-              status: "Graded",
-            }
-          : submission
-      )
+  useEffect(() => {
+    localStorage.setItem(
+      STORAGE_KEYS.enrolled,
+      JSON.stringify(enrolledCourseIds)
     );
-  }
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.courses, JSON.stringify(courses));
-  }, [courses]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.enrolled, JSON.stringify(enrolledCourseIds));
   }, [enrolledCourseIds]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.submissions, JSON.stringify(submissions));
-  }, [submissions]);
-
-  useEffect(() => {
     if (auth) {
-      localStorage.setItem(STORAGE_KEYS.auth, JSON.stringify(auth));
-      return;
+      localStorage.setItem(
+        STORAGE_KEYS.auth,
+        JSON.stringify(auth)
+      );
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.auth);
     }
-
-    localStorage.removeItem(STORAGE_KEYS.auth);
   }, [auth]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.users, JSON.stringify(users));
-  }, [users]);
 
   const value = {
     auth,
     isLoggedIn: Boolean(auth),
-    role: auth?.role || null,
+    role: auth?.role || "student",
     displayName: auth?.name || "",
-    userCount: users.length,
     studentName,
     courses,
     enrolledCourseIds,
     enrolledCourses,
     submissions,
+
     actions: {
       login,
       registerAccount,
@@ -304,5 +390,9 @@ export function CourseProvider({ children }) {
     },
   };
 
-  return <CourseSystemContext.Provider value={value}>{children}</CourseSystemContext.Provider>;
+  return (
+    <CourseSystemContext.Provider value={value}>
+      {children}
+    </CourseSystemContext.Provider>
+  );
 }
